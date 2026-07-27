@@ -102,8 +102,6 @@ jobs:
           echo ">>> Aligning Makefile naming convention with Fox..."
           mv "$TARGET_DT_DIR/omni_"*".mk" "$TARGET_DT_DIR/twrp_$(basename ${{ env.DT_PATH }}).mk" 2>/dev/null || true
           sed -i 's/omni/twrp/g' "$TARGET_DT_DIR/AndroidProducts.mk"
-          
-          # ---> NEW FIX: Rename 'omni' to 'twrp' INSIDE the actual makefile <---
           sed -i 's/omni/twrp/g' "$TARGET_DT_DIR/twrp_$(basename ${{ env.DT_PATH }}).mk"
 
       # Step 7: Compile OrangeFox
@@ -112,15 +110,13 @@ jobs:
           cd $GITHUB_WORKSPACE/fox
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL="C"
-          
-          # ---> NEW FIX: Declare FOX_BUILD_DEVICE variable <---
           export FOX_BUILD_DEVICE=$(basename ${{ env.DT_PATH }})
           
           source build/envsetup.sh
           lunch twrp_$(basename ${{ env.DT_PATH }})-eng
           
-          # ---> NEW FIX: Appended 'adbd' to the make string <---
-          mka adbd recoveryimage -j$(nproc --all)
+          # ---> FIX: Removed 'adbd' from this string so it stops crashing <---
+          mka recoveryimage -j$(nproc --all)
 
       # Step 8: Upload Artifact
       - name: Upload Finished Recovery
