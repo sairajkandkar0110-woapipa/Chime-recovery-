@@ -1,144 +1,88 @@
-name: Generate Perfect Device Tree (Redmi 9 Power)
+name: Compile OrangeFox from Repo Tree
 
 on:
   workflow_dispatch:
     inputs:
-      rom_url:
-        description: 'Direct Fastboot ROM URL (.tgz)'
+      device_name:
+        description: 'Device Codename (e.g., lime or chime)'
         required: true
-        default: 'https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/V14.0.2.0.SJQINXM/lime_in_global_images_V14.0.2.0.SJQINXM_20230424.0000.00_12.0_in_2dfffdd062.tgz'
+        default: 'lime'
 
 jobs:
-  build-tree:
+  build-recovery:
     runs-on: ubuntu-22.04
-    # Grants GitHub Actions the token access required to push the code back to your repo
-    permissions:
-      contents: write 
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      # Step 1: Maximize build space on the cloud runner
+      - name: Maximize Build Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
-      - name: Install Dependencies
+      # Step 2: Install required compilation tools
+      - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip aria2 tar
-          pip3 install twrpdtgen
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3-pip aria2 cpio tar curl openjdk-11-jdk python-is-python3
+          mkdir -p ~/.bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+          chmod a+rx ~/.bin/repo
+          echo "$HOME/.bin" >> $GITHUB_PATH
 
-      - name: Download & Extract Stock Recovery
-        run: |
-          mkdir -p workspace
-          cd workspace
-          echo ">>> Downloading Fastboot ROM (16 connections)..."
-          aria2c -x 16 -s 16 "${{ github.event.inputs.rom_url }}" -o rom.tgz
-          
-          echo ">>> Extracting recovery.img..."
-          tar -xf rom.tgz --wildcards "*/images/recovery.img" --strip-components=2
+      # Step 3: Checkout your perfect device tree from the repo
+      - name: Checkout Device Tree
+        uses: actions/checkout@v4
+        with:
+          path: repo_tree
 
-      - name: Generate Base Device Tree
+      # Step 4: Sync the OrangeFox 12.1 Manifest to a separate directory
+      - name: Sync OrangeFox Manifest
         run: |
-          cd workspace
-          python3 -m twrpdtgen recovery.img -o dt
-          
-          # Find the exact path where the files were generated (chime or lime)
-          DT_PATH=$(find dt -type d -name "chime" -o -name "lime" | head -n 1)
-          echo "DT_PATH=$DT_PATH" >> $GITHUB_ENV
-          echo "DEVICE_NAME=$(basename $DT_PATH)" >> $GITHUB_ENV
+          git clone https://gitlab.com/OrangeFox/sync.git $HOME/fox_sync
+          cd $HOME/fox_sync
+          ./orangefox_sync.sh --branch 12.1 --path $HOME/fox
 
-      - name: Apply Kernel, Decryption & EROFS Configurations
+      # Step 5: Move your custom device tree into the OrangeFox build environment
+      - name: Setup Device Tree
         run: |
-          cd workspace
-          TARGET_DIR="${{ env.DT_PATH }}"
+          DEVICE="${{ github.event.inputs.device_name }}"
+          TARGET_DIR="$HOME/fox/device/xiaomi/$DEVICE"
           
-          # 1. Structure Prebuilt Kernel Folder
-          mkdir -p "$TARGET_DIR/prebuilt"
-          mv "$TARGET_DIR/kernel" "$TARGET_DIR/prebuilt/kernel" 2>/dev/null || true
-          mv "$TARGET_DIR/dtb.img" "$TARGET_DIR/prebuilt/dtb" 2>/dev/null || true
-          mv "$TARGET_DIR/dtb" "$TARGET_DIR/prebuilt/dtb" 2>/dev/null || true
+          mkdir -p "$TARGET_DIR"
           
-          # 2. Inject BoardConfig with Perfect Parameters
-          BOARDCONFIG="$TARGET_DIR/BoardConfig.mk"
+          # Copy the tree from the GitHub repo into the Android build system
+          cp -r $GITHUB_WORKSPACE/repo_tree/* "$TARGET_DIR/"
           
-          # Delete default kernel paths written by twrpdtgen
-          sed -i '/TARGET_PREBUILT_KERNEL/d' "$BOARDCONFIG"
-          sed -i '/BOARD_PREBUILT_DTBIMAGE_DIR/d' "$BOARDCONFIG"
-          
-          cat << 'EOF' >> "$BOARDCONFIG"
-          
-          # --- PERFECT TREE INJECTIONS ---
-          
-          # Prebuilt Kernel Config
-          TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/kernel
-          BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt/dtb
-          BOARD_INCLUDE_DTB_IN_BOOTIMG := true
-          BOARD_BOOT_HEADER_VERSION := 2
-          BOARD_MKBOOTIMG_ARGS := --header_version $(BOARD_BOOT_HEADER_VERSION)
-          BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE := false
-          
-          # FBE Decryption 
-          TW_INCLUDE_CRYPTO := true
-          TW_INCLUDE_CRYPTO_FBE := true
-          TW_INCLUDE_FBE_METADATA_DECRYPT := true
-          BOARD_USES_METADATA_PARTITION := true
-          BOARD_USES_QCOM_FBE_DECRYPTION := true
-          
-          # Dynamic Partitions & EROFS
-          BOARD_SUPER_PARTITION_SIZE := 9126805504
-          BOARD_SUPER_PARTITION_GROUPS := qti_dynamic_partitions
-          BOARD_QTI_DYNAMIC_PARTITIONS_SIZE := 9122611200
-          TW_INCLUDE_FASTBOOTD := true
-          
-          TARGET_USERIMAGES_USE_EXT4 := true
-          TARGET_USERIMAGES_USE_F2FS := true
-          BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := erofs
-          BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := erofs
-          BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := erofs
-          BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := erofs
-          
-          # Standard Recovery Modules
-          OFOX_AB_DEVICE := false
-          TARGET_RECOVERY_DEVICE_MODULES += adbd
-          TW_ALWAYS_RMRF := true
-          TW_INCLUDE_NTFS_3G := true
-          EOF
-          
-          # 3. Restructure File Systems Map (recovery.fstab)
-          FSTAB="$TARGET_DIR/recovery.fstab"
-          
-          # Fix Metadata Decryption Mount
-          sed -i 's|/metadata.*|/metadata ext4 /dev/block/bootdevice/by-name/metadata flags=display="Metadata"|g' "$FSTAB"
-          
-          # Clear old auto-generated logic partitions
-          sed -i '/system /d' "$FSTAB"
-          sed -i '/vendor /d' "$FSTAB"
-          sed -i '/product /d' "$FSTAB"
-          sed -i '/system_ext /d' "$FSTAB"
-          sed -i '/odm /d' "$FSTAB"
-          
-          # Inject EROFS and EXT4 fallback directly at the top of the file
-          sed -i '1i # Logical (EXT4 Fallback)\nsystem /system ext4 ro wait,logical,first_stage_mount\nvendor /vendor ext4 ro wait,logical,first_stage_mount\nproduct /product ext4 ro wait,logical,first_stage_mount\nsystem_ext /system_ext ext4 ro wait,logical,first_stage_mount\n\n' "$FSTAB"
-          sed -i '1i # Logical (EROFS)\nsystem /system erofs ro wait,logical,first_stage_mount\nvendor /vendor erofs ro wait,logical,first_stage_mount\nproduct /product erofs ro wait,logical,first_stage_mount\nsystem_ext /system_ext erofs ro wait,logical,first_stage_mount\n' "$FSTAB"
-          
-          # 4. Clean up obsolete files and standardize Makefile names
-          rm -rf "$TARGET_DIR/vendorsetup.sh"
-          mv "$TARGET_DIR/omni_${{ env.DEVICE_NAME }}.mk" "$TARGET_DIR/twrp_${{ env.DEVICE_NAME }}.mk" 2>/dev/null || true
-          sed -i 's/omni/twrp/g' "$TARGET_DIR/AndroidProducts.mk"
-          sed -i 's/omni/twrp/g' "$TARGET_DIR/twrp_${{ env.DEVICE_NAME }}.mk"
+          echo ">>> Verifying Tree Structure in $TARGET_DIR:"
+          ls -la "$TARGET_DIR"
 
-      - name: Push Device Tree to Repo Root
+      # Step 6: Compile the Recovery Image
+      - name: Compile OrangeFox
         run: |
-          # Copy files out of the workspace directly into the root folder of your repo
-          cp -r workspace/${{ env.DT_PATH }}/* ./
+          DEVICE="${{ github.event.inputs.device_name }}"
+          cd $HOME/fox
           
-          # Delete the workspace so it doesn't get pushed alongside the tree
-          rm -rf workspace
+          # Set up strict environment variables
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL="C"
+          export FOX_BUILD_DEVICE="$DEVICE"
           
-          # Setup Git Bot
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Initialize the build environment and target
+          source build/envsetup.sh
+          lunch twrp_${DEVICE}-eng
           
-          # Commit the changes and push them back to GitHub
-          git add .
-          git commit -m "Auto-generated PERFECT device tree for ${{ env.DEVICE_NAME }}"
-          git push origin HEAD:${GITHUB_REF}
+          # Compile the image using all available CPU cores
+          mka recoveryimage -j$(nproc --all)
+
+      # Step 7: Output the finished file for download
+      - name: Upload Finished Recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-${{ github.event.inputs.device_name }}-recovery
+          path: /home/runner/fox/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
           
