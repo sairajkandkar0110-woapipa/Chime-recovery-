@@ -47,7 +47,7 @@ jobs:
           cd $HOME/fox_sync
           ./orangefox_sync.sh --branch 12.1 --path $HOME/fox
 
-      # Step 5: Move your custom device tree into the OrangeFox build environment
+      # Step 5: Move your custom device tree and INJECT MISSING FLAGS
       - name: Setup Device Tree
         run: |
           DEVICE="${{ github.event.inputs.device_name }}"
@@ -57,6 +57,16 @@ jobs:
           
           # Copy the tree from the GitHub repo into the Android build system
           cp -r $GITHUB_WORKSPACE/repo_tree/* "$TARGET_DIR/"
+          
+          # ---> THIS IS THE FIX FOR YOUR TARGET_COPY_OUT ERROR <---
+          echo ">>> Injecting missing partition map variables..."
+          cat << 'EOF' >> "$TARGET_DIR/BoardConfig.mk"
+          
+          # Partition Copy Out Paths
+          TARGET_COPY_OUT_VENDOR := vendor
+          TARGET_COPY_OUT_PRODUCT := product
+          TARGET_COPY_OUT_SYSTEM_EXT := system_ext
+          EOF
           
           echo ">>> Verifying Tree Structure in $TARGET_DIR:"
           ls -la "$TARGET_DIR"
