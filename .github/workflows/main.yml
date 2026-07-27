@@ -2,7 +2,6 @@ name: Build OrangeFox (Redmi 9 Power)
 
 on:
   workflow_dispatch:
-  # Inputs removed to make the build completely automatic
 
 jobs:
   build-recovery:
@@ -60,13 +59,17 @@ jobs:
           cd $GITHUB_WORKSPACE/fox_sync
           ./orangefox_sync.sh --branch 12.1 --path $GITHUB_WORKSPACE/fox
 
-      # Step 6: Copy generated tree, inject Decryption flags and ADB modules
+      # Step 6: Copy generated tree, inject flags, and DELETE legacy vendorsetup.sh
       - name: Inject Decryption & Configure Makefiles
         run: |
           # Using wildcard for chime/lime pathing
           TARGET_DT_DIR="$GITHUB_WORKSPACE/fox/device/xiaomi/$(basename ${{ env.DT_PATH }})"
           mkdir -p $(dirname "$TARGET_DT_DIR")
           cp -r ${{ env.DT_PATH }} "$TARGET_DT_DIR"
+          
+          # ---> THIS IS THE FIX FOR YOUR ERROR <---
+          echo ">>> Deleting legacy vendorsetup.sh to fix add_lunch_combo crash..."
+          rm -rf "$TARGET_DT_DIR/vendorsetup.sh"
           
           # Inject BoardConfig flags
           BOARDCONFIG="$TARGET_DT_DIR/BoardConfig.mk"
