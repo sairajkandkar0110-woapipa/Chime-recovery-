@@ -58,14 +58,18 @@ jobs:
           # Copy the tree from the GitHub repo into the Android build system
           cp -r $GITHUB_WORKSPACE/repo_tree/* "$TARGET_DIR/"
           
-          # ---> THIS IS THE FIX FOR YOUR TARGET_COPY_OUT ERROR <---
-          echo ">>> Injecting missing partition map variables..."
+          echo ">>> Injecting missing partition map and brightness variables..."
           cat << 'EOF' >> "$TARGET_DIR/BoardConfig.mk"
           
           # Partition Copy Out Paths
           TARGET_COPY_OUT_VENDOR := vendor
           TARGET_COPY_OUT_PRODUCT := product
           TARGET_COPY_OUT_SYSTEM_EXT := system_ext
+          
+          # ---> THIS IS THE FIX FOR YOUR BRIGHTNESS ERROR <---
+          # Display Brightness Settings
+          TW_MAX_BRIGHTNESS := 2047
+          TW_DEFAULT_BRIGHTNESS := 1200
           EOF
           
           echo ">>> Verifying Tree Structure in $TARGET_DIR:"
