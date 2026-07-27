@@ -1,0 +1,112 @@
+name: Build OrangeFox (Redmi 9 Power)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-recovery:
+    runs-on: ubuntu-22.04
+    steps:
+      # Step 1: Nuke pre-installed software to free up ~30GB of disk space
+      - name: Maximize Build Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      # Step 2: Install required Linux dependencies
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3-pip aria2 cpio tar curl openjdk-11-jdk python-is-python3
+          pip3 install twrpdtgen
+          mkdir -p ~/.bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+          chmod a+rx ~/.bin/repo
+          echo "$HOME/.bin" >> $GITHUB_PATH
+
+      # Step 3: Fast download and extract recovery from MIUI fastboot ROM
+      - name: Download & Extract Stock ROM
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/rom
+          cd $GITHUB_WORKSPACE/rom
+          aria2c -x 16 -s 16 "https://bn.d.miui.com/V14.0.2.0.SJQMIXM/juice_global_images_V14.0.2.0.SJQMIXM_20230519.0000.00_12.0_global_b2c5d087b7.tgz" -o stock_rom.tgz
+          tar -xf stock_rom.tgz --wildcards "*/images/recovery.img" --strip-components=2
+
+      # Step 4: Dynamically generate the skeleton device tree
+      - name: Generate Device Tree
+        run: |
+          python3 -m twrpdtgen $GITHUB_WORKSPACE/rom/recovery.img -o $GITHUB_WORKSPACE/dt
+          DT_PATH=$(find $GITHUB_WORKSPACE/dt -type d -name "chime" | head -n 1)
+          echo "DT_PATH=$DT_PATH" >> $GITHUB_ENV
+
+      # Step 5: Download the OrangeFox source code (shallow clone to save space)
+      - name: Sync OrangeFox Manifest
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/fox
+          cd $GITHUB_WORKSPACE/fox
+          repo init -u https://gitlab.com/OrangeFox/Manifest.git -b fox_12.1 --depth=1
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+      # Step 6: Move tree, inject ADB/Decryption flags, and prep Makefiles
+      - name: Inject Decryption & Configure Makefiles
+        run: |
+          TARGET_DT_DIR="$GITHUB_WORKSPACE/fox/device/xiaomi/chime"
+          mkdir -p $(dirname "$TARGET_DT_DIR")
+          cp -r ${{ env.DT_PATH }} "$TARGET_DT_DIR"
+          
+          # Inject BoardConfig flags
+          BOARDCONFIG="$TARGET_DT_DIR/BoardConfig.mk"
+          cat << 'EOF' >> "$BOARDCONFIG"
+          
+          # OrangeFox specific parameters
+          OFOX_AB_DEVICE := false
+          TARGET_DEVICE_ALT := juice,chime
+          TARGET_ARCH := arm64
+          ALLOW_MISSING_DEPENDENCIES := true
+          TW_INCLUDE_RESETPROP := true
+          TW_NO_BIND_SYSTEM := true
+          TARGET_RECOVERY_DEVICE_MODULES += adbd
+          TW_ALWAYS_RMRF := true
+          
+          # Qualcomm FBE Decryption
+          TW_INCLUDE_CRYPTO := true
+          TW_INCLUDE_CRYPTO_FBE := true
+          TW_INCLUDE_FBE_METADATA_DECRYPT := true
+          BOARD_USES_METADATA_PARTITION := true
+          BOARD_USES_QCOM_FBE_DECRYPTION := true
+          
+          # UI parameters
+          TW_THEME := portrait_hdpi
+          TW_EXTRA_LANGUAGES := false
+          TW_INCLUDE_NTFS_3G := true
+          EOF
+          
+          # Fix fstab for metadata partition
+          sed -i 's|/metadata.*|/metadata ext4 /dev/block/bootdevice/by-name/metadata flags=display="Metadata"|g' "$TARGET_DT_DIR/recovery.fstab"
+          
+          # Align Makefile naming convention with Fox
+          mv "$TARGET_DT_DIR/omni_chime.mk" "$TARGET_DT_DIR/twrp_chime.mk" 2>/dev/null || true
+
+      # Step 7: Compile the actual recovery.img
+      - name: Compile OrangeFox
+        run: |
+          cd $GITHUB_WORKSPACE/fox
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL="C"
+          lunch twrp_chime-eng
+          mka recoveryimage -j$(nproc --all)
+
+      # Step 8: Upload the finished file so you can download it to your phone
+      - name: Upload Finished Recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-chime-recovery
+          path: fox/out/target/product/chime/recovery.img
+          
