@@ -72,9 +72,13 @@ jobs:
           export LC_ALL="C"
           export FOX_BUILD_DEVICE="$DEVICE"
           
-          # Initialize the build environment and target
+          # Turn off GitHub's strict error crashing for the AOSP setup script
+          set +e
           source build/envsetup.sh
-          lunch twrp_${DEVICE}-eng
+          set -e
+          
+          # Initialize the build target (try eng first, fallback to userdebug)
+          lunch twrp_${DEVICE}-eng || lunch twrp_${DEVICE}-userdebug
           
           # Compile the image using all available CPU cores
           mka recoveryimage -j$(nproc --all)
