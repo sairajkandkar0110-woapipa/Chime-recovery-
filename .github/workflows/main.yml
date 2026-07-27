@@ -71,32 +71,22 @@ jobs:
           TW_DEFAULT_BRIGHTNESS := 1200
           EOF
           
-          # ---> THIS IS THE ULTIMATE FIX FOR THE DTB CRASH <---
           echo ">>> Fixing Header v2 DTB File Path..."
-          
-          # 1. Clean up any broken directory flags from previous runs
           sed -i '/BOARD_PREBUILT_DTBIMAGE_DIR/d' "$TARGET_DIR/BoardConfig.mk"
           sed -i '/BOARD_INCLUDE_DTB_IN_BOOTIMG/d' "$TARGET_DIR/BoardConfig.mk"
           sed -i '/TARGET_PREBUILT_DTB/d' "$TARGET_DIR/BoardConfig.mk"
           
-          # 2. Rename the prebuilt DTB to .img so it is recognized as a standalone file
           mv "$TARGET_DIR/prebuilt/dtb" "$TARGET_DIR/prebuilt/dtb.img" 2>/dev/null || true
           
-          # 3. Failsafe: If the DTB is completely empty, inject a bypass dummy
           if [ ! -s "$TARGET_DIR/prebuilt/dtb.img" ]; then
             echo ">>> WARNING: DTB image is empty! Generating fallback to bypass compiler crash..."
             echo "DUMMY_DTB_CONTENT" > "$TARGET_DIR/prebuilt/dtb.img"
           fi
           
-          # 4. Point the build system directly to the EXACT file
           cat << 'EOF' >> "$TARGET_DIR/BoardConfig.mk"
           TARGET_PREBUILT_DTB := $(DEVICE_PATH)/prebuilt/dtb.img
           BOARD_INCLUDE_DTB_IN_BOOTIMG := true
           EOF
-          
-          echo ">>> Verifying Tree Structure in $TARGET_DIR:"
-          ls -la "$TARGET_DIR"
-          ls -la "$TARGET_DIR/prebuilt/" || true
 
       # Step 6: Compile the Recovery Image
       - name: Compile OrangeFox
@@ -116,6 +106,11 @@ jobs:
           
           # Initialize the build target (try eng first, fallback to userdebug)
           lunch twrp_${DEVICE}-eng || lunch twrp_${DEVICE}-userdebug
+          
+          # ---> THIS IS THE FIX FOR THE NINJA RULE CRASH <---
+          echo ">>> Manually placing dtb.img in output folder to bypass missing Ninja rule..."
+          mkdir -p $HOME/fox/out/target/product/$DEVICE/
+          cp $HOME/fox/device/xiaomi/$DEVICE/prebuilt/dtb.img $HOME/fox/out/target/product/$DEVICE/dtb.img
           
           # Compile the image using all available CPU cores
           mka recoveryimage -j$(nproc --all)
