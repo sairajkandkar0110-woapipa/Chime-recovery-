@@ -2,6 +2,11 @@ name: Build OrangeFox (Redmi 9 Power)
 
 on:
   workflow_dispatch:
+    inputs:
+      rom_url:
+        description: 'Direct URL to Fastboot ROM (.tgz) or recovery.img'
+        required: true
+        default: ''
 
 jobs:
   build-recovery:
@@ -19,7 +24,7 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      # Step 2: Install required Linux dependencies
+      # Step 2: Install build environment & twrpdtgen
       - name: Setup Build Environment
         run: |
           sudo apt-get update
@@ -30,22 +35,31 @@ jobs:
           chmod a+rx ~/.bin/repo
           echo "$HOME/.bin" >> $GITHUB_PATH
 
-      # Step 3: Fast download and extract recovery from MIUI fastboot ROM
-      - name: Download & Extract Stock ROM
+      # Step 3: Download and handle archive vs direct .img file
+      - name: Download & Extract Stock Image
         run: |
           mkdir -p $GITHUB_WORKSPACE/rom
           cd $GITHUB_WORKSPACE/rom
-          aria2c -x 16 -s 16 "https://bn.d.miui.com/V14.0.2.0.SJQMIXM/juice_global_images_V14.0.2.0.SJQMIXM_20230519.0000.00_12.0_global_b2c5d087b7.tgz" -o stock_rom.tgz
-          tar -xf stock_rom.tgz --wildcards "*/images/recovery.img" --strip-components=2
+          URL="${{ github.event.inputs.rom_url }}"
+          
+          if [[ "$URL" == *.img ]]; then
+            echo ">>> Direct recovery.img link detected. Downloading..."
+            curl -sSL "$URL" -o recovery.img
+          else
+            echo ">>> Fastboot ROM archive link detected. Downloading via aria2c..."
+            aria2c -x 16 -s 16 "$URL" -o stock_rom.tgz
+            echo ">>> Extracting recovery.img from archive..."
+            tar -xf stock_rom.tgz --wildcards "*/images/recovery.img" --strip-components=2
+          fi
 
-      # Step 4: Dynamically generate the skeleton device tree
+      # Step 4: Generate Device Tree from the extracted image
       - name: Generate Device Tree
         run: |
           python3 -m twrpdtgen $GITHUB_WORKSPACE/rom/recovery.img -o $GITHUB_WORKSPACE/dt
           DT_PATH=$(find $GITHUB_WORKSPACE/dt -type d -name "chime" | head -n 1)
           echo "DT_PATH=$DT_PATH" >> $GITHUB_ENV
 
-      # Step 5: Download the OrangeFox source code (shallow clone to save space)
+      # Step 5: Sync OrangeFox Manifest (Android 12.1 base)
       - name: Sync OrangeFox Manifest
         run: |
           mkdir -p $GITHUB_WORKSPACE/fox
@@ -53,7 +67,7 @@ jobs:
           repo init -u https://gitlab.com/OrangeFox/Manifest.git -b fox_12.1 --depth=1
           repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-      # Step 6: Move tree, inject ADB/Decryption flags, and prep Makefiles
+      # Step 6: Copy generated tree, inject Decryption flags and ADB modules
       - name: Inject Decryption & Configure Makefiles
         run: |
           TARGET_DT_DIR="$GITHUB_WORKSPACE/fox/device/xiaomi/chime"
@@ -66,7 +80,7 @@ jobs:
           
           # OrangeFox specific parameters
           OFOX_AB_DEVICE := false
-          TARGET_DEVICE_ALT := juice,chime
+          TARGET_DEVICE_ALT := juice,chime,citrus,lime,lemon,pomelo
           TARGET_ARCH := arm64
           ALLOW_MISSING_DEPENDENCIES := true
           TW_INCLUDE_RESETPROP := true
@@ -87,13 +101,13 @@ jobs:
           TW_INCLUDE_NTFS_3G := true
           EOF
           
-          # Fix fstab for metadata partition
-          sed -i 's|/metadata.*|/metadata ext4 /dev/block/bootdevice/by-name/metadata flags=display="Metadata"|g' "$TARGET_DT_DIR/recovery.fstab"
+          # Update fstab for metadata encryption key path
+          sed -i 's|/metadata.*|/metadata ext4 /dev/block/bootdevice/by-name/metadata flags=display="Metadata"|g' "$TARGET_DT_DIR/recovery.fstab" 2>/dev/null || true
           
           # Align Makefile naming convention with Fox
           mv "$TARGET_DT_DIR/omni_chime.mk" "$TARGET_DT_DIR/twrp_chime.mk" 2>/dev/null || true
 
-      # Step 7: Compile the actual recovery.img
+      # Step 7: Compile OrangeFox
       - name: Compile OrangeFox
         run: |
           cd $GITHUB_WORKSPACE/fox
@@ -103,7 +117,7 @@ jobs:
           lunch twrp_chime-eng
           mka recoveryimage -j$(nproc --all)
 
-      # Step 8: Upload the finished file so you can download it to your phone
+      # Step 8: Upload Artifact
       - name: Upload Finished Recovery
         uses: actions/upload-artifact@v4
         with:
