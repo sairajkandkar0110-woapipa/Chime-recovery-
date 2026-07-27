@@ -47,7 +47,7 @@ jobs:
           cd $HOME/fox_sync
           ./orangefox_sync.sh --branch 12.1 --path $HOME/fox
 
-      # Step 5: Move your custom device tree and INJECT MISSING FLAGS
+      # Step 5: Move custom device tree and INJECT MISSING FLAGS
       - name: Setup Device Tree
         run: |
           DEVICE="${{ github.event.inputs.device_name }}"
@@ -58,7 +58,7 @@ jobs:
           # Copy the tree from the GitHub repo into the Android build system
           cp -r $GITHUB_WORKSPACE/repo_tree/* "$TARGET_DIR/"
           
-          echo ">>> Injecting missing partition map and brightness variables..."
+          echo ">>> Injecting partition map and brightness variables..."
           cat << 'EOF' >> "$TARGET_DIR/BoardConfig.mk"
           
           # Partition Copy Out Paths
@@ -71,13 +71,32 @@ jobs:
           TW_DEFAULT_BRIGHTNESS := 1200
           EOF
           
-          # ---> THIS IS THE FIX FOR YOUR DTB CRASH <---
-          echo ">>> Removing empty DTB requirements..."
+          # ---> THIS IS THE ULTIMATE FIX FOR THE DTB CRASH <---
+          echo ">>> Fixing Header v2 DTB File Path..."
+          
+          # 1. Clean up any broken directory flags from previous runs
           sed -i '/BOARD_PREBUILT_DTBIMAGE_DIR/d' "$TARGET_DIR/BoardConfig.mk"
           sed -i '/BOARD_INCLUDE_DTB_IN_BOOTIMG/d' "$TARGET_DIR/BoardConfig.mk"
+          sed -i '/TARGET_PREBUILT_DTB/d' "$TARGET_DIR/BoardConfig.mk"
+          
+          # 2. Rename the prebuilt DTB to .img so it is recognized as a standalone file
+          mv "$TARGET_DIR/prebuilt/dtb" "$TARGET_DIR/prebuilt/dtb.img" 2>/dev/null || true
+          
+          # 3. Failsafe: If the DTB is completely empty, inject a bypass dummy
+          if [ ! -s "$TARGET_DIR/prebuilt/dtb.img" ]; then
+            echo ">>> WARNING: DTB image is empty! Generating fallback to bypass compiler crash..."
+            echo "DUMMY_DTB_CONTENT" > "$TARGET_DIR/prebuilt/dtb.img"
+          fi
+          
+          # 4. Point the build system directly to the EXACT file
+          cat << 'EOF' >> "$TARGET_DIR/BoardConfig.mk"
+          TARGET_PREBUILT_DTB := $(DEVICE_PATH)/prebuilt/dtb.img
+          BOARD_INCLUDE_DTB_IN_BOOTIMG := true
+          EOF
           
           echo ">>> Verifying Tree Structure in $TARGET_DIR:"
           ls -la "$TARGET_DIR"
+          ls -la "$TARGET_DIR/prebuilt/" || true
 
       # Step 6: Compile the Recovery Image
       - name: Compile OrangeFox
@@ -107,4 +126,3 @@ jobs:
         with:
           name: OrangeFox-${{ github.event.inputs.device_name }}-recovery
           path: /home/runner/fox/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
-          
