@@ -59,7 +59,7 @@ jobs:
           cd $GITHUB_WORKSPACE/fox_sync
           ./orangefox_sync.sh --branch 12.1 --path $GITHUB_WORKSPACE/fox
 
-      # Step 6: Copy generated tree, inject flags, and DELETE legacy vendorsetup.sh
+      # Step 6: Copy generated tree, inject flags, fix makefiles
       - name: Inject Decryption & Configure Makefiles
         run: |
           # Using wildcard for chime/lime pathing
@@ -67,7 +67,6 @@ jobs:
           mkdir -p $(dirname "$TARGET_DT_DIR")
           cp -r ${{ env.DT_PATH }} "$TARGET_DT_DIR"
           
-          # ---> THIS IS THE FIX FOR YOUR ERROR <---
           echo ">>> Deleting legacy vendorsetup.sh to fix add_lunch_combo crash..."
           rm -rf "$TARGET_DT_DIR/vendorsetup.sh"
           
@@ -101,8 +100,10 @@ jobs:
           # Update fstab for metadata encryption key path
           sed -i 's|/metadata.*|/metadata ext4 /dev/block/bootdevice/by-name/metadata flags=display="Metadata"|g' "$TARGET_DT_DIR/recovery.fstab" 2>/dev/null || true
           
-          # Align Makefile naming convention with Fox
+          # ---> THIS IS THE FIX FOR YOUR LUNCH ERROR <---
+          echo ">>> Aligning Makefile naming convention with Fox..."
           mv "$TARGET_DT_DIR/omni_"*".mk" "$TARGET_DT_DIR/twrp_$(basename ${{ env.DT_PATH }}).mk" 2>/dev/null || true
+          sed -i 's/omni/twrp/g' "$TARGET_DT_DIR/AndroidProducts.mk"
 
       # Step 7: Compile OrangeFox
       - name: Compile OrangeFox
