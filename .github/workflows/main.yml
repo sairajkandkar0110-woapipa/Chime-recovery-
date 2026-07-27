@@ -66,11 +66,15 @@ jobs:
           TARGET_COPY_OUT_PRODUCT := product
           TARGET_COPY_OUT_SYSTEM_EXT := system_ext
           
-          # ---> THIS IS THE FIX FOR YOUR BRIGHTNESS ERROR <---
           # Display Brightness Settings
           TW_MAX_BRIGHTNESS := 2047
           TW_DEFAULT_BRIGHTNESS := 1200
           EOF
+          
+          # ---> THIS IS THE FIX FOR YOUR DTB CRASH <---
+          echo ">>> Removing empty DTB requirements..."
+          sed -i '/BOARD_PREBUILT_DTBIMAGE_DIR/d' "$TARGET_DIR/BoardConfig.mk"
+          sed -i '/BOARD_INCLUDE_DTB_IN_BOOTIMG/d' "$TARGET_DIR/BoardConfig.mk"
           
           echo ">>> Verifying Tree Structure in $TARGET_DIR:"
           ls -la "$TARGET_DIR"
